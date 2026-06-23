@@ -22,16 +22,14 @@ python toast_diagnostic.py
 ## Dependencies
 
 ```powershell
-pip install requests winotify win10toast
-# Optional: Install-Module BurntToast -Force  (PowerShell admin)
+pip install requests
 ```
 
 ## Architecture
 
 **`g2b_monitor.py`** — single-file monitor with these layers:
 - `fetch_bid_count()` — POSTs to the G2B JSON API, extracts `totCnt` from `dlBidPbancLstM` response envelope
-- `send_toast()` — primary path via `winotify`; `send_toast2()` is a legacy fallback chain (win10toast → BurntToast → WinRT PowerShell → console)
-- `send_discord()` — Discord 웹훅으로 embed 메시지 발송 (세부절차상태 변경, 신규 공고 알림)
+- `send_discord()` — Discord 웹훅으로 embed 메시지 발송 (세부절차상태 변경, 신규 공고, 세션 만료 알림)
 - `get_bid_status()` — 공고 dict에서 세부절차상태 필드를 후보 목록으로 탐색 추출
 - `check_and_notify_status_changes()` — 이전/현재 세부절차상태 비교 후 변경분 Discord 알림
 - `load_state()` / `save_state()` — persists `{count, bid_ids, bid_statuses, last_check}` in `state.json` across restarts

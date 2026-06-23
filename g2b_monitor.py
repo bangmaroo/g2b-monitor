@@ -1,8 +1,7 @@
 """
 나라장터(G2B) 입찰공고 모니터링 프로그램
 - 5분마다 건강보험심사평가원 클라우드 관련 입찰공고 건수를 체크
-- 변경 시 Windows 토스트 알림 발송
-- 세부절차상태 변경 시 Discord 웹훅 알림 발송
+- 변경 시 Discord 웹훅 알림 발송 (신규 공고 / 세부절차상태 변경)
 - 상태는 state.json 파일에 저장
 
 [주의] JSESSIONID 등 세션 쿠키는 일정 시간 후 만료됩니다.
@@ -17,12 +16,10 @@ import requests
 import json
 import time
 import logging
-import subprocess
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple, List, Set, Dict
-from winotify import Notification
 
 
 # ─────────────────────────────────────────────
@@ -122,71 +119,6 @@ def send_discord(title: str, description: str, color: int = COLOR_INFO, fields: 
 
 
 # ─────────────────────────────────────────────
-# Windows 토스트 알림
-# ─────────────────────────────────────────────
-def send_toast(title: str, message: str) -> None:
-    toast = Notification(
-        app_id="G2B Monitor",
-        title=title,
-        msg=message,
-        duration="long",
-    )
-    toast.show()
-
-def send_toast2(title: str, message: str) -> None:
-    """Windows 알림 센터에 토스트 알림을 발송합니다."""
-    try:
-        from win10toast import ToastNotifier
-        toaster = ToastNotifier()
-        toaster.show_toast(title, message, duration=10, threaded=True)
-        logger.info(f"[토스트] {title} — {message}")
-        return
-    except ImportError:
-        pass
-
-    try:
-        ps_script = (
-            f"Import-Module BurntToast -ErrorAction SilentlyContinue; "
-            f"New-BurntToastNotification -Text '{title}', '{message}'"
-        )
-        subprocess.run(
-            ["powershell", "-Command", ps_script],
-            capture_output=True,
-            timeout=10,
-        )
-        logger.info(f"[PowerShell 토스트] {title} — {message}")
-        return
-    except Exception:
-        pass
-
-    try:
-        ps_script = (
-            f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
-            f"$template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-            f"[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
-            f"$textNodes = $template.GetElementsByTagName('text'); "
-            f"$textNodes.Item(0).AppendChild($template.CreateTextNode('{title}')) | Out-Null; "
-            f"$textNodes.Item(1).AppendChild($template.CreateTextNode('{message}')) | Out-Null; "
-            f"$toast = [Windows.UI.Notifications.ToastNotification]::new($template); "
-            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('G2B Monitor').Show($toast);"
-        )
-        subprocess.run(
-            ["powershell", "-Command", ps_script],
-            capture_output=True,
-            timeout=10,
-        )
-        logger.info(f"[WinRT 토스트] {title} — {message}")
-        return
-    except Exception as e:
-        logger.warning(f"모든 토스트 방법 실패: {e}")
-
-    print(f"\n{'='*50}")
-    print(f"🔔 알림: {title}")
-    print(f"   {message}")
-    print(f"{'='*50}\n")
-
-
-# ─────────────────────────────────────────────
 # 상태 저장/로드
 # ─────────────────────────────────────────────
 def load_state() -> dict:
@@ -241,7 +173,7 @@ def fetch_bid_count() -> Tuple[Optional[int], List]:
     except requests.exceptions.HTTPError as e:
         if e.response is not None and e.response.status_code in (401, 403):
             logger.error("세션 만료 또는 인증 오류 (401/403). JSESSIONID 쿠키를 갱신하세요.")
-            send_toast("⚠️ G2B 세션 만료", "JSESSIONID 쿠키를 갱신해야 합니다.")
+            send_discord("⚠️ G2B 세션 만료", "config.json 의 `JSESSIONID` 쿠키를 갱신해야 합니다.", color=COLOR_STATUS_CHANGED)
         else:
             logger.error(f"HTTP 오류: {e}")
         return None, []
@@ -414,9 +346,9 @@ def monitor() -> None:
 
             if prev_count is None:
                 logger.info(f"최초 실행: 기준값 {count}건 저장")
-                send_toast(
+                send_discord(
                     "🔍 G2B 모니터링 시작",
-                    f"현재 공고 {count}건 기준으로 모니터링합니다.",
+                    f"현재 공고 **{count}건** 기준으로 모니터링합니다.",
                 )
             elif count != prev_count:
                 diff = count - prev_count
@@ -440,7 +372,6 @@ def monitor() -> None:
                     )
 
                 logger.info(f"변경 감지! {msg_body}")
-                send_toast(msg_title, f"건강보험심사평가원 클라우드 공고: {prev_count}→{count}건")
             else:
                 logger.info("변경 없음.")
 
