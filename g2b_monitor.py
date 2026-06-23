@@ -14,7 +14,6 @@
 
 import requests
 import json
-import time
 import logging
 import argparse
 from datetime import datetime, timezone
@@ -25,7 +24,6 @@ from typing import Optional, Tuple, List, Set, Dict
 # ─────────────────────────────────────────────
 # 고정 설정값
 # ─────────────────────────────────────────────
-INTERVAL_SECONDS = 5 * 60
 STATE_FILE  = Path("state.json")
 LOG_FILE    = Path("g2b_monitor.log")
 CONFIG_FILE = Path("config.json")
@@ -308,13 +306,11 @@ def check_state_once() -> None:
 
 
 # ─────────────────────────────────────────────
-# 메인 모니터링 루프
+# 메인 모니터링 (1회 실행 후 종료)
 # ─────────────────────────────────────────────
 def monitor() -> None:
     logger.info("=" * 60)
-    logger.info("나라장터 입찰공고 모니터링 시작")
-    logger.info(f"검색 조건: 건강보험심사평가원 / 클라우드 / 공개경쟁")
-    logger.info(f"체크 주기: {INTERVAL_SECONDS // 60}분")
+    logger.info("나라장터 입찰공고 체크")
     logger.info("=" * 60)
 
     state = load_state()
@@ -322,75 +318,63 @@ def monitor() -> None:
     prev_ids: Set[str] = set(state.get("bid_ids", []))
     prev_statuses: Dict[str, str] = state.get("bid_statuses", {})
 
-    while True:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"[{now}] API 조회 중...")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"[{now}] API 조회 중...")
 
-        count, bid_list = fetch_bid_count()
+    count, bid_list = fetch_bid_count()
 
-        if count is None:
-            logger.warning("조회 실패 — 다음 주기에 재시도합니다.")
-        else:
-            logger.info(f"현재 공고 건수: {count}건 (이전: {prev_count}건)")
+    if count is None:
+        logger.error("API 조회 실패. 종료합니다.")
+        return
 
-            current_ids = set()
-            for bid in bid_list:
-                bid_id = bid.get("bidPbancNo") or bid.get("untyBidPbancNo")
-                if bid_id:
-                    current_ids.add(str(bid_id))
+    logger.info(f"현재 공고 건수: {count}건 (이전: {prev_count}건)")
 
-            new_bids = [
-                b for b in bid_list
-                if str(b.get("bidPbancNo") or b.get("untyBidPbancNo") or "") not in prev_ids
-            ]
+    current_ids = set()
+    for bid in bid_list:
+        bid_id = bid.get("bidPbancNo") or bid.get("untyBidPbancNo")
+        if bid_id:
+            current_ids.add(str(bid_id))
 
-            if prev_count is None:
-                logger.info(f"최초 실행: 기준값 {count}건 저장")
-                send_discord(
-                    "🔍 G2B 모니터링 시작",
-                    f"현재 공고 **{count}건** 기준으로 모니터링합니다.",
-                )
-            elif count != prev_count:
-                diff = count - prev_count
-                sign = "+" if diff > 0 else ""
-                msg_title = f"📢 나라장터 공고 변경 ({sign}{diff}건)"
-                msg_body = f"건강보험심사평가원 클라우드 공고: {prev_count}건 → {count}건"
+    new_bids = [
+        b for b in bid_list
+        if str(b.get("bidPbancNo") or b.get("untyBidPbancNo") or "") not in prev_ids
+    ]
 
-                if new_bids:
-                    new_bid_text = format_new_bids(new_bids)
-                    msg_body += f"\n\n신규 공고:\n{new_bid_text}"
-                    logger.info(f"신규 공고 {len(new_bids)}건 감지")
-                    # 신규 공고도 Discord에 알림
-                    discord_fields = [
-                        {"name": "공고번호", "value": b.get("bidPbancNo") or b.get("untyBidPbancNo") or "-", "inline": True}
-                        for b in new_bids[:5]
-                    ]
-                    send_discord(
-                        title=f"📢 신규 공고 {len(new_bids)}건",
-                        description=new_bid_text,
-                        color=COLOR_NEW_BID,
-                    )
+    if prev_count is None:
+        logger.info(f"최초 실행: 기준값 {count}건 저장")
+        send_discord(
+            "🔍 G2B 모니터링 시작",
+            f"현재 공고 **{count}건** 기준으로 모니터링합니다.",
+        )
+    elif count != prev_count:
+        diff = count - prev_count
+        sign = "+" if diff > 0 else ""
+        msg_body = f"건강보험심사평가원 클라우드 공고: {prev_count}건 → {count}건"
 
-                logger.info(f"변경 감지! {msg_body}")
-            else:
-                logger.info("변경 없음.")
+        if new_bids:
+            new_bid_text = format_new_bids(new_bids)
+            logger.info(f"신규 공고 {len(new_bids)}건 감지")
+            send_discord(
+                title=f"📢 신규 공고 {len(new_bids)}건 ({sign}{diff}건)",
+                description=new_bid_text,
+                color=COLOR_NEW_BID,
+            )
 
-            # 세부절차상태 변경 체크
-            current_statuses = check_and_notify_status_changes(bid_list, prev_statuses)
-            prev_statuses = current_statuses if current_statuses else prev_statuses
+        logger.info(f"변경 감지! {msg_body}")
+    else:
+        logger.info("변경 없음.")
 
-            # 상태 업데이트
-            prev_count = count
-            prev_ids = current_ids if current_ids else prev_ids
-            save_state({
-                "count": prev_count,
-                "bid_ids": list(prev_ids),
-                "bid_statuses": prev_statuses,
-                "last_check": now,
-            })
+    # 세부절차상태 변경 체크
+    current_statuses = check_and_notify_status_changes(bid_list, prev_statuses)
 
-        logger.info(f"다음 체크: {INTERVAL_SECONDS // 60}분 후")
-        time.sleep(INTERVAL_SECONDS)
+    # 상태 저장
+    save_state({
+        "count": count,
+        "bid_ids": list(current_ids if current_ids else prev_ids),
+        "bid_statuses": current_statuses if current_statuses else prev_statuses,
+        "last_check": now,
+    })
+    logger.info("완료.")
 
 
 # ─────────────────────────────────────────────
@@ -405,10 +389,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    try:
-        if args.state:
-            check_state_once()
-        else:
-            monitor()
-    except KeyboardInterrupt:
-        logger.info("모니터링 종료 (Ctrl+C)")
+    if args.state:
+        check_state_once()
+    else:
+        monitor()
