@@ -12,6 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Start the monitor (runs indefinitely)
 python g2b_monitor.py
 
+# 세부절차상태 1회 체크 후 종료 (변경 시 Discord 알림)
+python g2b_monitor.py --state
+
 # Diagnose Windows toast notification issues
 python toast_diagnostic.py
 ```
@@ -28,8 +31,12 @@ pip install requests winotify win10toast
 **`g2b_monitor.py`** — single-file monitor with these layers:
 - `fetch_bid_count()` — POSTs to the G2B JSON API, extracts `totCnt` from `dlBidPbancLstM` response envelope
 - `send_toast()` — primary path via `winotify`; `send_toast2()` is a legacy fallback chain (win10toast → BurntToast → WinRT PowerShell → console)
-- `load_state()` / `save_state()` — persists `{count, bid_ids, last_check}` in `state.json` across restarts
+- `send_discord()` — Discord 웹훅으로 embed 메시지 발송 (세부절차상태 변경, 신규 공고 알림)
+- `get_bid_status()` — 공고 dict에서 세부절차상태 필드를 후보 목록으로 탐색 추출
+- `check_and_notify_status_changes()` — 이전/현재 세부절차상태 비교 후 변경분 Discord 알림
+- `load_state()` / `save_state()` — persists `{count, bid_ids, bid_statuses, last_check}` in `state.json` across restarts
 - `monitor()` — infinite loop: fetch → diff against state → notify on change → sleep 5 min
+- `check_state_once()` — `--state` 모드: 1회 조회 → 세부절차상태 비교 → 알림 → 종료
 
 **`toast_diagnostic.py`** — standalone script that tests all notification methods (win10toast, WinRT PowerShell, BurntToast, registry settings, Focus Assist) and prints pass/fail for each.
 
